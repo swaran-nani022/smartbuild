@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template, send_file
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from ultralytics import YOLO
 from ultralytics.nn.tasks import DetectionModel
@@ -14,11 +14,13 @@ from dotenv import load_dotenv
 import firebase_admin
 from firebase_admin import credentials, auth, db
 
+
 # ==================== ENV ====================
 load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
+
 
 # ==================== FIREBASE CONFIG ====================
 FIREBASE_DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL")
@@ -36,13 +38,12 @@ try:
         cred = credentials.Certificate("serviceAccountKey.json")
         print("🔐 Firebase auth via local file")
 
-    firebase_admin.initialize_app(cred, {
-        "databaseURL": FIREBASE_DATABASE_URL
-    })
+    firebase_admin.initialize_app(cred, {"databaseURL": FIREBASE_DATABASE_URL})
     print("✅ Firebase initialized")
 except Exception as e:
     print("❌ Firebase init failed:", e)
     raise
+
 
 # ==================== YOLO MODEL ====================
 MODEL_DIR = "models"
@@ -56,15 +57,29 @@ if not os.path.exists(MODEL_PATH):
     urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
     print("✅ Model downloaded")
 
-# 🔥 PYTORCH 2.6+ FIX (MANDATORY)
-torch.serialization.add_safe_globals([DetectionModel])
 
-model = YOLO(MODEL_PATH)
-print("🤖 YOLO model loaded")
+# ==================== PYTORCH 2.6+ SAFE LOAD FIX ====================
+# Your Render logs show: Unsupported global torch.nn.modules.container.Sequential
+# PyTorch recommends allowlisting it via torch.serialization.add_safe_globals(). [web:871][web:876]
+from torch.nn.modules.container import Sequential
+torch.serialization.add_safe_globals([DetectionModel, Sequential])  # [web:871][web:876]
+
+
+# ==================== LAZY MODEL LOADING (prevents Gunicorn crash) ====================
+model = None
+
+def get_model():
+    global model
+    if model is None:
+        model = YOLO(MODEL_PATH)
+        print("🤖 YOLO model loaded")
+    return model
+
 
 # ==================== UPLOADS ====================
 UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
 
 # ==================== AUTH DECORATOR ====================
 def firebase_token_required(f):
@@ -84,7 +99,7 @@ def firebase_token_required(f):
             request.user = {
                 "uid": decoded["uid"],
                 "email": decoded.get("email"),
-                "name": decoded.get("name")
+                "name": decoded.get("name"),
             }
         except Exception:
             return jsonify({"error": "Invalid or expired token"}), 401
@@ -92,14 +107,17 @@ def firebase_token_required(f):
         return f(*args, **kwargs)
     return decorated
 
+
 # ==================== AUTH PLACEHOLDERS ====================
 @app.route("/api/register", methods=["POST"])
 def register():
     return jsonify({"error": "Use Firebase Auth on frontend"}), 400
 
+
 @app.route("/api/login", methods=["POST"])
 def login():
     return jsonify({"error": "Use Firebase Auth on frontend"}), 400
+
 
 # ==================== PROFILE ====================
 @app.route("/api/profile", methods=["GET"])
@@ -109,6 +127,7 @@ def get_profile():
     stored = db.reference(f"users/{uid}/profile").get() or {}
     return jsonify({"user": {**request.user, **stored}})
 
+
 @app.route("/api/profile", methods=["PUT"])
 @firebase_token_required
 def update_profile():
@@ -117,6 +136,7 @@ def update_profile():
     data["updated_at"] = datetime.utcnow().isoformat()
     db.reference(f"users/{uid}/profile").update(data)
     return jsonify({"message": "Profile updated"})
+
 
 # ==================== ANALYSIS ====================
 @app.route("/api/analyze", methods=["POST"])
@@ -132,13 +152,14 @@ def analyze_image():
     image_path = os.path.join(UPLOAD_FOLDER, filename)
     image.save(image_path)
 
-    results = model.predict(image_path, conf=0.20)
+    mdl = get_model()
+    results = mdl.predict(image_path, conf=0.20)
 
     detected = {}
     for r in results:
         if r.boxes:
             for c in r.boxes.cls:
-                name = model.names[int(c)]
+                name = mdl.names[int(c)]
                 detected[name] = detected.get(name, 0) + 1
 
     count = sum(detected.values())
@@ -152,7 +173,7 @@ def analyze_image():
         "peeling": 10,
         "algae": 5,
         "stain": 5,
-        "normal": 0
+        "normal": 0,
     }
 
     score = max(0, 100 - sum(penalties.get(d, 0) * c for d, c in detected.items()))
@@ -164,7 +185,7 @@ def analyze_image():
         "spalling": "Repair concrete immediately.",
         "peeling": "Remove loose material and repaint.",
         "algae": "Clean and improve drainage.",
-        "stain": "Identify moisture source."
+        "stain": "Identify moisture source.",
     }
 
     precautions = list({precaution_map[d] for d in detected if d in precaution_map})
@@ -175,12 +196,12 @@ def analyze_image():
         "health_score": score,
         "precautions": precautions,
         "image_url": f"/api/images/{filename}",
-        "created_at": datetime.utcnow().isoformat()
+        "created_at": datetime.utcnow().isoformat(),
     }
 
     ref = db.reference(f"users/{uid}/inspections").push(data)
-
     return jsonify({**data, "inspection_id": ref.key})
+
 
 # ==================== INSPECTIONS ====================
 @app.route("/api/inspections", methods=["GET"])
@@ -190,12 +211,14 @@ def get_inspections():
     data = db.reference(f"users/{uid}/inspections").get() or {}
     return jsonify({"inspections": [{**v, "id": k} for k, v in data.items()]})
 
+
 @app.route("/api/inspections/<inspection_id>", methods=["DELETE"])
 @firebase_token_required
 def delete_inspection(inspection_id):
     uid = request.user["uid"]
     db.reference(f"users/{uid}/inspections/{inspection_id}").delete()
     return jsonify({"message": "Inspection deleted"})
+
 
 # ==================== IMAGE SERVING ====================
 @app.route("/api/images/<filename>")
@@ -204,6 +227,7 @@ def serve_image(filename):
     if os.path.exists(path):
         return send_file(path)
     return jsonify({"error": "Image not found"}), 404
+
 
 # ==================== LEGACY ====================
 @app.route("/analyze", methods=["POST"])
@@ -215,31 +239,29 @@ def analyze_legacy():
     image_path = os.path.join(UPLOAD_FOLDER, image.filename)
     image.save(image_path)
 
-    results = model.predict(image_path, conf=0.20)
+    mdl = get_model()
+    results = mdl.predict(image_path, conf=0.20)
     detected = {}
 
     for r in results:
         if r.boxes:
             for c in r.boxes.cls:
-                name = model.names[int(c)]
+                name = mdl.names[int(c)]
                 detected[name] = detected.get(name, 0) + 1
 
     return jsonify({"detected_damages": detected})
 
+
 # ==================== ROOT ====================
 @app.route("/")
 def home():
-    return jsonify({
-        "message": "Smart Building Inspection Backend",
-        "status": "running"
-    })
+    return jsonify({"message": "Smart Building Inspection Backend", "status": "running"})
+
 
 @app.route("/health")
 def health():
-    return jsonify({
-        "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat()
-    })
+    return jsonify({"status": "healthy", "timestamp": datetime.utcnow().isoformat()})
+
 
 # ==================== LOCAL ONLY ====================
 if __name__ == "__main__":
