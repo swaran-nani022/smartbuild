@@ -6,3 +6,10 @@ __pycache__/
 serviceAccountKey.json
 *.json
 !.firebase.json
+.env
+*.pt
+models/best.pt
+uploads/
+runs/
+__pycache__/
+serviceAccountKey.json
