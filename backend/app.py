@@ -186,8 +186,25 @@ def get_inspections():
 @firebase_token_required
 def delete_inspection(iid):
     uid = request.user["uid"]
-    db.reference(f"users/{uid}/inspections/{iid}").delete()
-    return jsonify({"message": "Inspection deleted"})
+    ref = db.reference(f"users/{uid}/inspections/{iid}")
+    inspection = ref.get()
+
+    if not inspection:
+        return jsonify({"error": "Inspection not found"}), 404
+
+    # 🔥 DELETE IMAGE FILE
+    image_url = inspection.get("image_url")
+    if image_url:
+        filename = image_url.split("/")[-1]
+        image_path = os.path.join(UPLOAD_FOLDER, filename)
+        if os.path.exists(image_path):
+            os.remove(image_path)
+            print(f"🗑️ Deleted image: {filename}")
+
+    # 🔥 DELETE DB RECORD
+    ref.delete()
+
+    return jsonify({"message": "Inspection and image deleted"})
 
 # ==================== IMAGE SERVE ====================
 @app.route("/api/images/<filename>")
