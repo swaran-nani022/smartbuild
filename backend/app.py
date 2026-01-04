@@ -57,13 +57,15 @@ if not os.path.exists(MODEL_PATH):
 
 # ==================== PYTORCH 2.6+ SAFE LOAD FIX ====================
 from torch.nn.modules.container import Sequential
-from torch.nn.modules.conv import Conv2d  # NEW: allowlist Conv2d
+from torch.nn.modules.conv import Conv2d
+from torch.nn.modules.batchnorm import BatchNorm2d  # NEW
 
 torch.serialization.add_safe_globals([
     DetectionModel,
     Sequential,
-    Conv,    # Ultralytics Conv block
-    Conv2d,  # PyTorch Conv2d used inside YOLO
+    Conv,         # Ultralytics Conv block
+    Conv2d,       # torch.nn.modules.conv.Conv2d
+    BatchNorm2d,  # torch.nn.modules.batchnorm.BatchNorm2d
 ])
 
 # ==================== LAZY MODEL LOADING ====================
