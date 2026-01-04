@@ -1,24 +1,29 @@
+# ==================== PYTORCH FIX (MUST BE FIRST) ====================
+import os
+os.environ["TORCH_LOAD_WEIGHTS_ONLY"] = "0"
+
+# ==================== IMPORTS ====================
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
+from ultralytics import YOLO
+import torch
 
-import os
 import json
 import urllib.request
 from datetime import datetime
 from functools import wraps
 from dotenv import load_dotenv
 
-# ==================== ENV ====================
-load_dotenv()
-
-# ==================== FLASK ====================
-app = Flask(__name__)
-CORS(app)
-
-# ==================== FIREBASE ====================
 import firebase_admin
 from firebase_admin import credentials, auth, db
 
+# ==================== ENV ====================
+load_dotenv()
+
+app = Flask(__name__)
+CORS(app)
+
+# ==================== FIREBASE CONFIG ====================
 FIREBASE_DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL")
 FIREBASE_SERVICE_ACCOUNT_JSON = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
 
@@ -41,30 +46,7 @@ except Exception as e:
     print("❌ Firebase init failed:", e)
     raise
 
-# ==================== YOLO + TORCH SAFE LOAD ====================
-import torch
-from ultralytics import YOLO
-from ultralytics.nn.tasks import DetectionModel
-from ultralytics.nn.modules.block import C2f
-from ultralytics.nn.modules.conv import Conv
-
-from torch.nn.modules.container import Sequential
-from torch.nn.modules.conv import Conv2d
-from torch.nn.modules.batchnorm import BatchNorm2d
-from torch.nn.modules.activation import SiLU
-
-# 🔥 REQUIRED for PyTorch ≥ 2.6
-torch.serialization.add_safe_globals([
-    DetectionModel,
-    C2f,
-    Conv,
-    Sequential,
-    Conv2d,
-    BatchNorm2d,
-    SiLU,
-])
-
-# ==================== MODEL ====================
+# ==================== YOLO MODEL ====================
 MODEL_DIR = "models"
 MODEL_PATH = os.getenv("MODEL_PATH", os.path.join(MODEL_DIR, "best.pt"))
 MODEL_URL = "https://drive.google.com/uc?export=download&id=18U3aCY60Woi1l9Ebm8HaB9QZ7ELEvxV4"
@@ -95,15 +77,16 @@ def firebase_token_required(f):
     def wrapper(*args, **kwargs):
         header = request.headers.get("Authorization", "")
         if not header.startswith("Bearer "):
-            return jsonify({"error": "Auth token missing"}), 401
+            return jsonify({"error": "Token missing"}), 401
 
-        token = header.split(" ", 1)[1].strip()
+        token = header.split(" ", 1)[1]
+
         try:
             decoded = auth.verify_id_token(token)
             request.user = {
                 "uid": decoded["uid"],
                 "email": decoded.get("email"),
-                "name": decoded.get("name")
+                "name": decoded.get("name"),
             }
         except Exception:
             return jsonify({"error": "Invalid or expired token"}), 401
@@ -111,30 +94,21 @@ def firebase_token_required(f):
         return f(*args, **kwargs)
     return wrapper
 
-# ==================== AUTH PLACEHOLDERS ====================
-@app.route("/api/register", methods=["POST"])
-def register():
-    return jsonify({"error": "Use Firebase Auth on frontend"}), 400
-
-@app.route("/api/login", methods=["POST"])
-def login():
-    return jsonify({"error": "Use Firebase Auth on frontend"}), 400
-
 # ==================== PROFILE ====================
 @app.route("/api/profile", methods=["GET"])
 @firebase_token_required
 def get_profile():
     uid = request.user["uid"]
-    profile = db.reference(f"users/{uid}/profile").get() or {}
-    return jsonify({"user": {**request.user, **profile}})
+    data = db.reference(f"users/{uid}/profile").get() or {}
+    return jsonify({"user": {**request.user, **data}})
 
 @app.route("/api/profile", methods=["PUT"])
 @firebase_token_required
 def update_profile():
     uid = request.user["uid"]
-    data = request.json or {}
-    data["updated_at"] = datetime.utcnow().isoformat()
-    db.reference(f"users/{uid}/profile").update(data)
+    payload = request.json or {}
+    payload["updated_at"] = datetime.utcnow().isoformat()
+    db.reference(f"users/{uid}/profile").update(payload)
     return jsonify({"message": "Profile updated"})
 
 # ==================== ANALYZE ====================
@@ -147,26 +121,26 @@ def analyze_image():
     image = request.files["image"]
     uid = request.user["uid"]
 
-    filename = f"{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{image.filename.replace(' ', '_')}"
+    filename = f"{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{image.filename}"
     path = os.path.join(UPLOAD_FOLDER, filename)
     image.save(path)
 
     model = get_model()
-    results = model.predict(path, conf=0.20)
+    results = model.predict(path, conf=0.2)
 
     detected = {}
     for r in results:
         if r.boxes:
-            for c in r.boxes.cls:
-                name = model.names[int(c)]
+            for cls in r.boxes.cls:
+                name = model.names[int(cls)]
                 detected[name] = detected.get(name, 0) + 1
 
     total = sum(detected.values())
     severity = "Good" if total == 0 else "Moderate" if total <= 2 else "Critical"
 
     penalties = {
-        "crack": 12,
         "major_crack": 15,
+        "crack": 12,
         "minor_crack": 8,
         "spalling": 20,
         "peeling": 10,
@@ -174,19 +148,19 @@ def analyze_image():
         "stain": 5,
     }
 
-    score = max(0, 100 - sum(penalties.get(d, 0) * c for d, c in detected.items()))
+    score = max(0, 100 - sum(penalties.get(k, 0) * v for k, v in detected.items()))
 
     precautions_map = {
-        "crack": "Seal cracks early.",
         "major_crack": "Immediate structural inspection required.",
+        "crack": "Seal cracks early to prevent expansion.",
         "minor_crack": "Monitor and seal if needed.",
         "spalling": "Repair damaged concrete immediately.",
-        "peeling": "Remove loose material and repaint.",
+        "peeling": "Remove loose paint and repaint.",
         "algae": "Clean surface and improve drainage.",
-        "stain": "Identify and eliminate moisture source.",
+        "stain": "Check for moisture leakage.",
     }
 
-    precautions = list({precautions_map[d] for d in detected if d in precautions_map})
+    precautions = list({precautions_map[k] for k in detected if k in precautions_map})
 
     data = {
         "detected_damages": detected,
@@ -223,10 +197,10 @@ def serve_image(filename):
         return send_file(path)
     return jsonify({"error": "Image not found"}), 404
 
-# ==================== ROOT ====================
+# ==================== HEALTH ====================
 @app.route("/")
-def home():
-    return jsonify({"service": "Smart Building Inspection", "status": "running"})
+def root():
+    return jsonify({"status": "running"})
 
 @app.route("/health")
 def health():
