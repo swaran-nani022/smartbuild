@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from ultralytics import YOLO
 from ultralytics.nn.tasks import DetectionModel
-from ultralytics.nn.modules.conv import Conv  # allowlist Conv for PyTorch 2.6+
+from ultralytics.nn.modules.conv import Conv  # Ultralytics Conv
 import torch
 
 import os
@@ -57,14 +57,16 @@ if not os.path.exists(MODEL_PATH):
 
 # ==================== PYTORCH 2.6+ SAFE LOAD FIX ====================
 from torch.nn.modules.container import Sequential
+from torch.nn.modules.conv import Conv2d  # NEW: allowlist Conv2d
 
 torch.serialization.add_safe_globals([
     DetectionModel,
     Sequential,
-    Conv,  # allow YOLO Conv blocks
+    Conv,    # Ultralytics Conv block
+    Conv2d,  # PyTorch Conv2d used inside YOLO
 ])
 
-# ==================== LAZY MODEL LOADING (prevents Gunicorn crash) ====================
+# ==================== LAZY MODEL LOADING ====================
 model = None
 
 
@@ -206,6 +208,7 @@ def get_inspections():
     data = db.reference(f"users/{uid}/inspections").get() or {}
     return jsonify({"inspections": [{**v, "id": k} for k, v in data.items()]})
 
+
 @app.route("/api/inspections/<inspection_id>", methods=["DELETE"])
 @firebase_token_required
 def delete_inspection(inspection_id):
@@ -247,6 +250,7 @@ def analyze_legacy():
 @app.route("/")
 def home():
     return jsonify({"message": "Smart Building Inspection Backend", "status": "running"})
+
 
 @app.route("/health")
 def health():
