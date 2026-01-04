@@ -58,7 +58,8 @@ if not os.path.exists(MODEL_PATH):
 # ==================== PYTORCH 2.6+ SAFE LOAD FIX ====================
 from torch.nn.modules.container import Sequential
 from torch.nn.modules.conv import Conv2d
-from torch.nn.modules.batchnorm import BatchNorm2d  # NEW
+from torch.nn.modules.batchnorm import BatchNorm2d
+from torch.nn.modules.activation import SiLU  # NEW
 
 torch.serialization.add_safe_globals([
     DetectionModel,
@@ -66,6 +67,7 @@ torch.serialization.add_safe_globals([
     Conv,         # Ultralytics Conv block
     Conv2d,       # torch.nn.modules.conv.Conv2d
     BatchNorm2d,  # torch.nn.modules.batchnorm.BatchNorm2d
+    SiLU,         # torch.nn.modules.activation.SiLU
 ])
 
 # ==================== LAZY MODEL LOADING ====================
@@ -79,9 +81,11 @@ def get_model():
         print("🤖 YOLO model loaded")
     return model
 
+
 # ==================== UPLOADS ====================
 UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
 
 # ==================== AUTH DECORATOR ====================
 def firebase_token_required(f):
@@ -110,6 +114,7 @@ def firebase_token_required(f):
 
     return decorated
 
+
 # ==================== AUTH PLACEHOLDERS ====================
 @app.route("/api/register", methods=["POST"])
 def register():
@@ -119,6 +124,7 @@ def register():
 @app.route("/api/login", methods=["POST"])
 def login():
     return jsonify({"error": "Use Firebase Auth on frontend"}), 400
+
 
 # ==================== PROFILE ====================
 @app.route("/api/profile", methods=["GET"])
@@ -137,6 +143,7 @@ def update_profile():
     data["updated_at"] = datetime.utcnow().isoformat()
     db.reference(f"users/{uid}/profile").update(data)
     return jsonify({"message": "Profile updated"})
+
 
 # ==================== ANALYSIS ====================
 @app.route("/api/analyze", methods=["POST"])
@@ -202,6 +209,7 @@ def analyze_image():
     ref = db.reference(f"users/{uid}/inspections").push(data)
     return jsonify({**data, "inspection_id": ref.key})
 
+
 # ==================== INSPECTIONS ====================
 @app.route("/api/inspections", methods=["GET"])
 @firebase_token_required
@@ -218,6 +226,7 @@ def delete_inspection(inspection_id):
     db.reference(f"users/{uid}/inspections/{inspection_id}").delete()
     return jsonify({"message": "Inspection deleted"})
 
+
 # ==================== IMAGE SERVING ====================
 @app.route("/api/images/<filename>")
 def serve_image(filename):
@@ -225,6 +234,7 @@ def serve_image(filename):
     if os.path.exists(path):
         return send_file(path)
     return jsonify({"error": "Image not found"}), 404
+
 
 # ==================== LEGACY (no auth) ====================
 @app.route("/analyze", methods=["POST"])
@@ -248,6 +258,7 @@ def analyze_legacy():
 
     return jsonify({"detected_damages": detected})
 
+
 # ==================== ROOT ====================
 @app.route("/")
 def home():
@@ -257,6 +268,7 @@ def home():
 @app.route("/health")
 def health():
     return jsonify({"status": "healthy", "timestamp": datetime.utcnow().isoformat()})
+
 
 # ==================== LOCAL ONLY ====================
 if __name__ == "__main__":
